@@ -39,6 +39,36 @@ async def chat_endpoint(request: CampaignRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/campaign/generate-now")
+async def generate_campaign_now(request: CampaignRequest):
+    """Force campaign generation with current context"""
+    try:
+        response = marketing_ai_service._generate_campaign_with_current_context(
+            request.user_id
+        )
+        return CampaignResponse(**response)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/search/enhance-context")
+async def enhance_context_with_search(request: CampaignRequest):
+    """Enhance current context with web search"""
+    try:
+        context = marketing_ai_service.conversation_contexts.get(request.user_id)
+        if not context:
+            raise HTTPException(status_code=404, detail="User context not found")
+        
+        # Enhance with web search
+        enhanced_context = marketing_ai_service._enhance_context_with_web_search(context)
+        
+        return {
+            "message": "Context enhanced with web search data",
+            "enhanced_context": enhanced_context,
+            "web_enhanced": enhanced_context.web_enhanced
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/conversation/{user_id}/reset")
 async def reset_conversation(user_id: str):
     """Reset conversation for a user"""
@@ -51,19 +81,20 @@ async def reset_conversation(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/search")
-async def search_insights(request: SearchRequest):
-    """Search for competitors or trending keywords"""
+@app.get("/conversation/{user_id}/context")
+async def get_conversation_context(user_id: str):
+    """Get current conversation context"""
     try:
-        if request.search_type == "competitors":
-            results = marketing_ai_service.search_service.search_competitors(request.query)
-        else:
-            results = marketing_ai_service.search_service.search_trending_keywords(request.query)
+        context = marketing_ai_service.conversation_contexts.get(user_id)
+        state = marketing_ai_service.conversation_states.get(user_id)
+        
+        if not context:
+            raise HTTPException(status_code=404, detail="Conversation not found")
         
         return {
-            "query": request.query,
-            "type": request.search_type,
-            "results": results
+            "context": context,
+            "state": state,
+            "missing_fields": marketing_ai_service.get_missing_fields(context)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -86,10 +117,17 @@ async def root():
         "version": settings.app_version,
         "features": [
             "User Context Understanding",
-            "Interactive Conversation Flow", 
+            "Interactive Conversation Flow with Early Exit", 
+            "Real Web Search via Serper API",
             "Competitor & Trend Research",
             "Campaign Strategy Generation",
             "Multi-Platform Content Creation"
+        ],
+        "early_generation_commands": [
+            "generate campaign now",
+            "create campaign now", 
+            "use what you have",
+            "proceed with current information"
         ]
     }
 

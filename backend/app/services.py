@@ -1,46 +1,160 @@
 import ollama
-from typing import Dict, Any, List, Tuple
+import requests
 import json
 import time
 import re
-import requests
+import os
+from typing import Dict, Any, List
 from .models import UserContext, ConversationState, BrandTone, CampaignGoal, Platform
 from .config import settings
 
-class WebSearchService:
-    """Mock web search service - can be replaced with actual API"""
+class SerperSearchService:
+    """Real web search service using Serper API"""
     
-    def search_competitors(self, product_type: str) -> List[str]:
-        """Mock competitor search based on product type"""
+    def __init__(self):
+        self.api_key = settings.serper_api_key
+        self.base_url = settings.serper_api_url
+    
+    def search_competitors(self, product_type: str, industry: str = "") -> List[str]:
+        """Search for real competitors using Serper API"""
+        if not self.api_key:
+            return self._get_fallback_competitors(product_type)
+            
+        query = f"top companies in {product_type} industry competitors"
+        if industry:
+            query = f"top {industry} companies competitors {product_type}"
+        
+        payload = {
+            "q": query,
+            "gl": "us",
+            "hl": "en",
+            "num": 10
+        }
+        
+        headers = {
+            'X-API-KEY': self.api_key,
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            response = requests.post(self.base_url, headers=headers, json=payload)
+            data = response.json()
+            
+            competitors = []
+            # Extract from organic results
+            if 'organic' in data:
+                for item in data['organic'][:5]:
+                    title = item.get('title', '')
+                    # Clean up title and extract company name
+                    company = self._extract_company_name(title)
+                    if company and company not in competitors:
+                        competitors.append(company)
+            
+            return competitors if competitors else self._get_fallback_competitors(product_type)
+            
+        except Exception as e:
+            print(f"Serper API error: {e}")
+            return self._get_fallback_competitors(product_type)
+    
+    def search_trending_keywords(self, industry: str, product_type: str = "") -> List[str]:
+        """Search for trending keywords in the industry"""
+        if not self.api_key:
+            return self._get_fallback_trends(industry)
+            
+        query = f"trending topics in {industry} industry 2024 latest"
+        if product_type:
+            query = f"{product_type} trends 2024 {industry}"
+        
+        payload = {
+            "q": query,
+            "gl": "us",
+            "hl": "en"
+        }
+        
+        headers = {
+            'X-API-KEY': self.api_key,
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            response = requests.post(self.base_url, headers=headers, json=payload)
+            data = response.json()
+            
+            trends = []
+            # Extract from People Also Ask and related searches
+            if 'peopleAlsoAsk' in data:
+                for item in data['peopleAlsoAsk'][:5]:
+                    question = item.get('question', '')
+                    if question:
+                        trends.append(question)
+            
+            if 'relatedSearches' in data:
+                for item in data['relatedSearches'][:5]:
+                    search_query = item.get('query', '')
+                    if search_query:
+                        trends.append(search_query)
+            
+            # Also extract from organic results
+            if 'organic' in data and not trends:
+                for item in data['organic'][:3]:
+                    title = item.get('title', '')
+                    if 'trend' in title.lower() or '2024' in title:
+                        trends.append(title)
+            
+            return trends if trends else self._get_fallback_trends(industry)
+            
+        except Exception as e:
+            print(f"Serper API error: {e}")
+            return self._get_fallback_trends(industry)
+    
+    def _extract_company_name(self, title: str) -> str:
+        """Extract company name from search result title"""
+        # Remove common suffixes and clean up
+        clean_title = re.sub(r' - .*$', '', title)  # Remove everything after -
+        clean_title = re.sub(r'\|.*$', '', clean_title)  # Remove everything after |
+        clean_title = re.sub(r'^.*?: ', '', clean_title)  # Remove prefix before :
+        clean_title = re.sub(r'\s+', ' ', clean_title).strip()  # Normalize spaces
+        
+        # Remove common words
+        remove_words = ['review', 'reviews', 'best', 'top', '2024', '2023', 'buy', 'price']
+        words = clean_title.split()
+        filtered_words = [word for word in words if word.lower() not in remove_words]
+        
+        return ' '.join(filtered_words[:4])  # Return first 4 words as company name
+    
+    def _get_fallback_competitors(self, product_type: str) -> List[str]:
+        """Fallback competitor data if API fails"""
         competitor_map = {
-            "health": ["Fitbit", "MyFitnessPal", "Headspace", "Calm"],
-            "tech": ["Apple", "Samsung", "Google", "Microsoft"],
-            "fashion": ["Zara", "H&M", "Nike", "Adidas"],
-            "food": ["McDonald's", "Starbucks", "Domino's", "Chipotle"],
-            "finance": ["PayPal", "Square", "Robinhood", "Coinbase"],
-            "education": ["Coursera", "Udemy", "Khan Academy", "Duolingo"]
+            "health": ["Fitbit", "MyFitnessPal", "Headspace", "Calm", "Noom"],
+            "tech": ["Apple", "Samsung", "Google", "Microsoft", "Amazon"],
+            "fashion": ["Zara", "H&M", "Nike", "Adidas", "Uniqlo"],
+            "food": ["McDonald's", "Starbucks", "Domino's", "Chipotle", "Subway"],
+            "finance": ["PayPal", "Square", "Robinhood", "Coinbase", "Stripe"],
+            "education": ["Coursera", "Udemy", "Khan Academy", "Duolingo", "Skillshare"],
+            "software": ["Salesforce", "Adobe", "Slack", "Zoom", "Microsoft 365"],
+            "beauty": ["Sephora", "Ulta", "Glossier", "Fenty Beauty", "The Ordinary"]
         }
         
         for category, competitors in competitor_map.items():
             if category in product_type.lower():
                 return competitors
-        return ["Industry Leader A", "Emerging Competitor B", "Direct Competitor C"]
+        return ["Industry Leader A", "Emerging Competitor B", "Direct Competitor C", "Market Disruptor D"]
     
-    def search_trending_keywords(self, industry: str) -> List[str]:
-        """Mock trending keywords search"""
+    def _get_fallback_trends(self, industry: str) -> List[str]:
+        """Fallback trend data if API fails"""
         trend_map = {
-            "health": ["mindfulness", "wellness", "fitness tracking", "mental health"],
-            "tech": ["AI assistants", "smart home", "cybersecurity", "cloud computing"],
-            "fashion": ["sustainable fashion", "athleisure", "vintage", "custom fit"],
-            "food": ["plant-based", "meal prep", "local sourcing", "food delivery"],
-            "finance": ["crypto", "fintech", "digital banking", "investment apps"],
-            "education": ["online learning", "skill development", "micro-courses", "career transition"]
+            "health": ["mental wellness", "telehealth", "fitness tech", "personalized nutrition", "sleep optimization"],
+            "tech": ["AI integration", "sustainable tech", "edge computing", "quantum computing", "web3"],
+            "fashion": ["sustainable fashion", "digital clothing", "upcycling", "inclusive sizing", "slow fashion"],
+            "food": ["plant-based alternatives", "functional foods", "ghost kitchens", "local sourcing", "meal kits"],
+            "finance": ["decentralized finance", "buy now pay later", "embedded finance", "AI banking", "sustainable investing"],
+            "education": ["micro-learning", "skills-based education", "VR learning", "corporate training", "lifelong learning"]
         }
         
         for category, trends in trend_map.items():
             if category in industry.lower():
                 return trends
-        return ["digital transformation", "customer experience", "sustainability", "innovation"]
+        return ["digital transformation", "customer experience", "sustainability", "personalization", "mobile-first"]
 
 class MarketingAIService:
     def __init__(self):
@@ -48,7 +162,7 @@ class MarketingAIService:
         self.conversation_states: Dict[str, ConversationState] = {}
         self.conversation_histories: Dict[str, List[Dict]] = {}
         self.last_activity: Dict[str, float] = {}
-        self.search_service = WebSearchService()
+        self.search_service = SerperSearchService()
         
         # Initialize Ollama client
         self.ollama_client = ollama.Client(
@@ -68,6 +182,8 @@ Key Responsibilities:
 4. Generate complete campaign deliverables (ad copy, emails, social posts)
 5. Tailor all content to the specific brand context
 
+IMPORTANT: If the user asks to generate the campaign immediately or says they're ready, proceed with campaign creation using whatever context is available. Don't ask for more information if they explicitly want to proceed.
+
 Always maintain a professional yet approachable tone. Ask one question at a time to avoid overwhelming the user. Provide clear, actionable marketing advice."""
 
     def _verify_model(self):
@@ -81,8 +197,24 @@ Always maintain a professional yet approachable tone. Ask one question at a time
         except Exception as e:
             print(f"Error verifying model: {e}")
 
+    def _cleanup_old_conversations(self):
+        """Remove conversations older than max_conversation_age"""
+        current_time = time.time()
+        expired_users = [
+            user_id for user_id, last_active in self.last_activity.items()
+            if current_time - last_active > settings.max_conversation_age
+        ]
+        
+        for user_id in expired_users:
+            self.conversation_contexts.pop(user_id, None)
+            self.conversation_states.pop(user_id, None)
+            self.conversation_histories.pop(user_id, None)
+            self.last_activity.pop(user_id, None)
+
     def initialize_conversation(self, user_id: str) -> str:
         """Initialize a new conversation with system prompt"""
+        self._cleanup_old_conversations()
+        
         self.conversation_contexts[user_id] = UserContext()
         self.conversation_states[user_id] = ConversationState.COLLECTING_CONTEXT
         self.conversation_histories[user_id] = []
@@ -90,9 +222,13 @@ Always maintain a professional yet approachable tone. Ask one question at a time
         
         initial_prompt = f"""{self.system_prompt}
 
-Welcome! I'm your AI Marketing Strategist. I'll help you create a comprehensive marketing campaign step by step.
+🚀 **Welcome to Your AI Marketing Strategist!**
 
-Let's start by understanding your basics. Tell me about your product or service, and I'll guide you through the rest."""
+I'll help you create a comprehensive marketing campaign. We can either:
+1. Go through all the details step by step, OR
+2. You can tell me to "generate campaign now" at any point and I'll create it with whatever information we have!
+
+Let's start by understanding your product or service. What are you offering?"""
         
         return initial_prompt
 
@@ -105,48 +241,60 @@ Let's start by understanding your basics. Tell me about your product or service,
                 missing.append(field)
         return missing
 
-    def get_next_question(self, context: UserContext, state: ConversationState) -> Tuple[str, bool]:
-        """Determine the next question based on current context and state"""
-        missing_fields = self.get_missing_fields(context)
-        
-        if state == ConversationState.COLLECTING_CONTEXT and missing_fields:
-            field_questions = {
-                'target_audience': "🎯 **Target Audience**: Who are you trying to reach? (e.g., 'Young professionals aged 25-35 interested in fitness')",
-                'brand_tone': "🎭 **Brand Tone**: How would you describe your brand's personality? (professional, casual, funny, inspirational, authoritative)",
-                'campaign_goals': "🎯 **Campaign Goals**: What do you want to achieve? (brand awareness, conversions, engagement, lead generation)",
-                'preferred_platforms': "📱 **Platforms**: Where will you market? (Facebook, Instagram, Twitter, LinkedIn, Email, Google Ads, TikTok, YouTube)",
-                'product_details': "📦 **Product/Service**: Tell me about what you're offering and its key benefits"
+    def _should_generate_campaign_early(self, user_message: str) -> bool:
+        """Check if user wants to generate campaign immediately"""
+        early_triggers = [
+            'generate campaign now', 'create campaign now', 'make campaign now',
+            'stop talking and generate', 'just create the campaign', 
+            'proceed with current information', 'use what you have',
+            'generate with current context', 'create with what we have',
+            'i\'m ready', 'let\'s generate', 'make it now', 'build campaign',
+            'that\'s enough info', 'go ahead and create'
+        ]
+        user_message_lower = user_message.lower()
+        return any(trigger in user_message_lower for trigger in early_triggers)
+
+    def _enhance_context_with_web_search(self, context: UserContext) -> UserContext:
+        """Enhance context with real web search data"""
+        if not context.web_enhanced and context.product_details:
+            print("Enhancing context with web search...")
+            
+            # Extract industry from product details
+            industry_keywords = {
+                'health': ['health', 'fitness', 'wellness', 'medical', 'therapy'],
+                'tech': ['tech', 'software', 'app', 'digital', 'saas'],
+                'fashion': ['fashion', 'clothing', 'apparel', 'style', 'wear'],
+                'food': ['food', 'restaurant', 'meal', 'recipe', 'cooking'],
+                'finance': ['finance', 'banking', 'investment', 'money', 'financial'],
+                'education': ['education', 'learning', 'course', 'training', 'school']
             }
-            return field_questions[missing_fields[0]], False
+            
+            industry = "general"
+            for ind, keywords in industry_keywords.items():
+                if any(keyword in context.product_details.lower() for keyword in keywords):
+                    industry = ind
+                    break
+            
+            # Search for competitors and trends
+            competitors = self.search_service.search_competitors(context.product_details, industry)
+            trends = self.search_service.search_trending_keywords(industry, context.product_details)
+            
+            if competitors:
+                context.competitors = competitors
+            if trends:
+                context.trending_keywords = trends
+            
+            context.web_enhanced = True
+            print(f"Web enhancement complete: {len(competitors)} competitors, {len(trends)} trends")
         
-        elif state == ConversationState.COLLECTING_CONTEXT and not missing_fields:
-            # Move to insights gathering
-            return "Great! I have the basics. Now let's gather some strategic insights.\n\nDo you have any specific competitors I should know about, or would you like me to research some based on your industry?", True
-        
-        elif state == ConversationState.GATHERING_INSIGHTS:
-            if not context.competitors:
-                return "🔍 **Competitor Research**: Who are your main competitors? (I can also suggest some based on your industry)", False
-            elif not context.trending_keywords:
-                return "📈 **Market Trends**: Any specific keywords or trends you want to target? (I can research current trends in your space)", False
-            elif not context.key_messages:
-                return "💡 **Key Messages**: What are your main value propositions or unique selling points?", False
-            else:
-                return "Ready to create your campaign!", True
-        
-        return "Is there anything else you'd like to add before we create your campaign?", True
+        return context
 
     def update_context_from_message(self, user_id: str, message: str) -> UserContext:
-        """Enhanced context extraction with web search integration"""
+        """Update context from user message with enhanced extraction"""
         context = self.conversation_contexts[user_id]
-        state = self.conversation_states[user_id]
         
-        # Extract basic context
+        # Manual context extraction
         updates = self._extract_context_manual(message, context)
-        
-        # Handle web search requests
-        if state == ConversationState.GATHERING_INSIGHTS:
-            search_updates = self._handle_insight_requests(message, context)
-            updates.update(search_updates)
         
         # Apply updates
         for field, value in updates.items():
@@ -161,32 +309,12 @@ Let's start by understanding your basics. Tell me about your product or service,
         
         return context
 
-    def _handle_insight_requests(self, message: str, context: UserContext) -> Dict[str, Any]:
-        """Handle requests for competitor and trend research"""
-        updates = {}
-        message_lower = message.lower()
-        
-        # Check if user wants automated research
-        research_triggers = ['research', 'suggest', 'find some', 'look up', 'automate']
-        if any(trigger in message_lower for trigger in research_triggers):
-            if 'competitor' in message_lower or 'competition' in message_lower:
-                if context.product_details:
-                    competitors = self.search_service.search_competitors(context.product_details)
-                    updates['competitors'] = competitors
-            
-            if 'trend' in message_lower or 'keyword' in message_lower:
-                if context.product_details:
-                    trends = self.search_service.search_trending_keywords(context.product_details)
-                    updates['trending_keywords'] = trends
-        
-        return updates
-
     def _extract_context_manual(self, message: str, current_context: UserContext) -> Dict[str, Any]:
-        """Manual context extraction with enhanced field detection"""
+        """Manual context extraction"""
         updates = {}
         message_lower = message.lower()
         
-        # Enhanced extraction patterns for all field types
+        # Basic field extraction patterns
         patterns = {
             'target_audience': [
                 r'(?:audience|target|customers?|users?).{0,20}?(?:is|are|:)\s*([^.!?]+)',
@@ -196,14 +324,6 @@ Let's start by understanding your basics. Tell me about your product or service,
                 r'(?:product|service|business|offering).{0,30}?(?:is|are|:)\s*([^.!?]+)',
                 r'(?:sell|offer|provide).{0,30}?([^.!?]+)',
             ],
-            'competitors': [
-                r'(?:competitors?|competition).{0,30}?(?:is|are|:)\s*([^.!?]+)',
-                r'(?:competing against|similar to|like).{0,30}?([^.!?]+)',
-            ],
-            'key_messages': [
-                r'(?:message|value|benefit|proposition).{0,30}?(?:is|are|:)\s*([^.!?]+)',
-                r'(?:highlight|emphasize|focus on).{0,30}?([^.!?]+)',
-            ]
         }
         
         for field, field_patterns in patterns.items():
@@ -212,12 +332,7 @@ Let's start by understanding your basics. Tell me about your product or service,
                 if match:
                     value = match.group(1).strip()
                     if value and len(value) > 2:
-                        if field in ['competitors', 'key_messages']:
-                            # Split lists by common separators
-                            items = re.split(r'[,;]|\band\b', value)
-                            updates[field] = [item.strip() for item in items if item.strip()]
-                        else:
-                            updates[field] = value.capitalize()
+                        updates[field] = value.capitalize()
                         break
         
         # Enum field extraction
@@ -226,7 +341,7 @@ Let's start by understanding your basics. Tell me about your product or service,
         return updates
 
     def _extract_enum_fields(self, message: str) -> Dict[str, Any]:
-        """Extract enum fields with comprehensive mapping"""
+        """Extract enum fields"""
         updates = {}
         message_lower = message.lower()
         
@@ -286,7 +401,7 @@ Let's start by understanding your basics. Tell me about your product or service,
         return updates
 
     def generate_response(self, user_id: str, user_message: str) -> Dict[str, Any]:
-        """Enhanced response generation with interactive conversation flow"""
+        """Enhanced response generation with early campaign trigger"""
         self.last_activity[user_id] = time.time()
         
         # Initialize if new user
@@ -298,6 +413,10 @@ Let's start by understanding your basics. Tell me about your product or service,
                 "state": self.conversation_states[user_id],
                 "is_complete": False
             }
+
+        # Check for early campaign generation
+        if self._should_generate_campaign_early(user_message):
+            return self._generate_campaign_with_current_context(user_id)
 
         # Update context
         context = self.update_context_from_message(user_id, user_message)
@@ -311,44 +430,17 @@ Let's start by understanding your basics. Tell me about your product or service,
             self.conversation_states[user_id] = state
         
         # Check if ready for campaign generation
-        if (state == ConversationState.GATHERING_INSIGHTS and 
-            context.competitors and 
-            context.trending_keywords and 
-            context.key_messages):
+        if state == ConversationState.GATHERING_INSIGHTS and context.competitors and context.trending_keywords:
             state = ConversationState.READY_FOR_CAMPAIGN
             self.conversation_states[user_id] = state
         
         # Handle campaign creation request
-        if (state == ConversationState.READY_FOR_CAMPAIGN and 
-            self._should_create_campaign(user_message)):
-            
-            state = ConversationState.GENERATING_CAMPAIGN
-            self.conversation_states[user_id] = state
-            campaign_content = self.generate_campaign_content(user_id)
-            
-            return {
-                "response": "🎉 **Campaign Generation Complete!**\n\nI've created a comprehensive marketing campaign tailored to your needs. Here are your deliverables:",
-                "context": context,
-                "state": state,
-                "is_complete": True,
-                "campaign_content": campaign_content
-            }
+        if state == ConversationState.READY_FOR_CAMPAIGN and self._should_create_campaign(user_message):
+            return self._generate_campaign_with_current_context(user_id)
         
         # Generate conversational response
-        next_question, is_ready = self.get_next_question(context, state)
+        response = self._generate_conversational_response(context, state, user_message)
         
-        if is_ready and state != ConversationState.READY_FOR_CAMPAIGN:
-            response = next_question
-        else:
-            # Use AI for nuanced responses
-            prompt = self._build_conversation_prompt(context, state, user_message, next_question)
-            ai_response = self.ollama_client.chat(
-                model=settings.ollama_model,
-                messages=[{'role': 'user', 'content': prompt}],
-                options={'temperature': settings.temperature}
-            )
-            response = ai_response['message']['content']
-
         return {
             "response": response,
             "context": context,
@@ -356,29 +448,136 @@ Let's start by understanding your basics. Tell me about your product or service,
             "is_complete": False
         }
 
-    def _build_conversation_prompt(self, context: UserContext, state: ConversationState, 
-                                 user_message: str, next_question: str) -> str:
-        """Build context-aware conversation prompt"""
-        return f"""
-        {self.system_prompt}
+    def _generate_campaign_with_current_context(self, user_id: str) -> Dict[str, Any]:
+        """Generate campaign with available context, enhanced with web search"""
+        context = self.conversation_contexts[user_id]
+        
+        print(f"Generating campaign with current context. Missing fields: {self.get_missing_fields(context)}")
+        
+        # Enhance with web search
+        context = self._enhance_context_with_web_search(context)
+        
+        # Generate campaign content
+        campaign_content = self.generate_campaign_content(user_id)
+        
+        # Update state
+        self.conversation_states[user_id] = ConversationState.GENERATING_CAMPAIGN
+        
+        # Build response message based on context completeness
+        missing_fields = self.get_missing_fields(context)
+        if missing_fields:
+            response_msg = f"🚀 **Generating Campaign with Available Context**\n\nI'm creating your campaign with the information we have. I've supplemented with web research for missing details. Here's your tailored strategy:"
+        else:
+            response_msg = f"🎉 **Campaign Generation Complete!**\n\nI've created a comprehensive marketing campaign based on all your requirements. Here are your deliverables:"
+        
+        return {
+            "response": response_msg,
+            "context": context,
+            "state": ConversationState.GENERATING_CAMPAIGN,
+            "is_complete": True,
+            "campaign_content": campaign_content
+        }
 
-        Current Context:
-        {context.json()}
+    def _generate_conversational_response(self, context: UserContext, state: ConversationState, user_message: str) -> str:
+        """Generate appropriate conversational response based on state"""
+        
+        if state == ConversationState.COLLECTING_CONTEXT:
+            missing_fields = self.get_missing_fields(context)
+            if missing_fields:
+                field_questions = {
+                    'target_audience': "🎯 **Who is your target audience?** (e.g., 'Young professionals aged 25-35 interested in fitness and sustainability')",
+                    'brand_tone': "🎭 **What brand tone would you like?** (professional, casual, funny, inspirational, authoritative)",
+                    'campaign_goals': "🎯 **What are your main campaign goals?** (brand awareness, conversions, engagement, lead generation)",
+                    'preferred_platforms': "📱 **Which platforms will you use?** (Facebook, Instagram, Twitter, LinkedIn, Email, Google Ads, TikTok, YouTube)",
+                    'product_details': "📦 **Tell me about your product/service and its key benefits**"
+                }
+                next_question = field_questions[missing_fields[0]]
+                
+                prompt = f"""
+                {self.system_prompt}
+                
+                Current context collected so far:
+                - Product: {context.product_details or 'Not specified'}
+                - Audience: {context.target_audience or 'Not specified'} 
+                - Tone: {context.brand_tone or 'Not specified'}
+                - Goals: {', '.join([g.value for g in context.campaign_goals]) if context.campaign_goals else 'Not specified'}
+                - Platforms: {', '.join([p.value for p in context.preferred_platforms]) if context.preferred_platforms else 'Not specified'}
+                
+                User just said: "{user_message}"
+                
+                Next question to ask: {next_question}
+                
+                Respond naturally, acknowledge their input, and ask the next question. Keep it conversational.
+                """
+            else:
+                # Move to insights gathering
+                prompt = f"""
+                {self.system_prompt}
+                
+                Great! I have the basic information. Now let's gather some market insights.
+                
+                User message: "{user_message}"
+                
+                Ask if they have specific competitors in mind, or if they'd like you to research current competitors and trends for their industry.
+                """
+        
+        elif state == ConversationState.GATHERING_INSIGHTS:
+            if not context.competitors:
+                prompt = f"""
+                {self.system_prompt}
+                
+                Let's research your competitive landscape.
+                
+                User message: "{user_message}"
+                
+                Ask about their main competitors, or offer to research current competitors in their space.
+                """
+            elif not context.trending_keywords:
+                prompt = f"""
+                {self.system_prompt}
+                
+                Now let's look at current market trends.
+                
+                User message: "{user_message}"
+                
+                Ask about any specific keywords or trends they want to target, or offer to research current trends.
+                """
+            else:
+                prompt = f"""
+                {self.system_prompt}
+                
+                We have all the insights we need! The user can now ask to generate the campaign.
+                
+                User message: "{user_message}"
+                
+                Let them know we're ready to create their campaign and they can say "generate campaign now" whenever they're ready.
+                """
+        
+        else:
+            # Ready for campaign
+            prompt = f"""
+            {self.system_prompt}
+            
+            We're ready to generate the campaign! The user can trigger it at any time.
+            
+            User message: "{user_message}"
+            
+            Remind them they can say "generate campaign now" to create their marketing campaign.
+            """
+        
+        # Get AI response
+        ai_response = self.ollama_client.chat(
+            model=settings.ollama_model,
+            messages=[{'role': 'user', 'content': prompt}],
+            options={'temperature': settings.temperature, 'num_predict': settings.max_tokens}
+        )
+        
+        return ai_response['message']['content']
 
-        Conversation State: {state}
-        User Message: "{user_message}"
-
-        Next question to guide toward: {next_question}
-
-        Your Response Should:
-        1. Acknowledge the user's input naturally
-        2. Guide them toward the next question organically
-        3. Provide marketing insights when relevant
-        4. Keep the conversation focused and productive
-        5. Be concise but helpful
-
-        Respond as a marketing expert:
-        """
+    def _should_create_campaign(self, user_message: str) -> bool:
+        """Check if user wants to create campaign"""
+        triggers = ['create campaign', 'yes', 'generate', 'make campaign', 'proceed', 'go ahead', 'ready', 'start']
+        return any(trigger in user_message.lower() for trigger in triggers)
 
     def generate_campaign_content(self, user_id: str) -> Dict[str, Any]:
         """Generate comprehensive campaign deliverables"""
@@ -389,13 +588,14 @@ Let's start by understanding your basics. Tell me about your product or service,
 
         Generate a COMPLETE marketing campaign based on this context:
 
+        CONTEXT:
         {context.json()}
 
         DELIVERABLES REQUIRED:
 
         1. CAMPAIGN STRATEGY OVERVIEW
         - Overall approach and positioning
-        - Key differentiators
+        - Key differentiators against competitors: {context.competitors}
         - Success metrics
 
         2. AD COPY (for each specified platform)
@@ -424,15 +624,16 @@ Let's start by understanding your basics. Tell me about your product or service,
         {{
             "campaign_strategy": {{
                 "overview": "2-3 paragraph strategy",
-                "targeting": "Audience targeting approach",
+                "targeting": "Audience targeting approach", 
                 "positioning": "Brand positioning statement",
-                "success_metrics": ["Metric 1", "Metric 2"]
+                "success_metrics": ["Metric 1", "Metric 2", "Metric 3"],
+                "competitive_advantage": "How it stands out from competitors"
             }},
             "ad_copy": {{
-                "facebook": ["Headline 1", "Headline 2"],
-                "instagram": ["Post 1", "Post 2"],
+                "facebook": ["Headline 1", "Headline 2", "Body copy..."],
+                "instagram": ["Post 1", "Post 2", "Story ideas..."],
                 "email": ["Subject: ...\\n\\nBody..."],
-                "google_ads": ["Headline 1 | Headline 2"]
+                "google_ads": ["Headline 1 | Headline 2 | Description"]
             }},
             "email_drafts": [
                 "Subject: ...\\n\\nBody content...",
@@ -440,18 +641,18 @@ Let's start by understanding your basics. Tell me about your product or service,
             ],
             "social_media_posts": [
                 "Platform: Post content with hashtags",
-                "Platform: Post content with hashtags"
+                "Platform: Post content with hashtags" 
             ],
             "content_calendar": {{
-                "week_1": ["Task 1", "Task 2"],
-                "week_2": ["Task 1", "Task 2"],
-                "week_3": ["Task 1", "Task 2"],
-                "week_4": ["Task 1", "Task 2"]
+                "week_1": ["Task 1", "Task 2", "Task 3"],
+                "week_2": ["Task 1", "Task 2", "Task 3"],
+                "week_3": ["Task 1", "Task 2", "Task 3"],
+                "week_4": ["Task 1", "Task 2", "Task 3"]
             }},
             "key_messaging": ["Message 1", "Message 2", "Message 3"]
         }}
 
-        Make all content specific, actionable, and tailored to the context.
+        Make all content specific, actionable, and tailored to the context. Use real competitor names and trends when available.
         """
 
         try:
@@ -471,66 +672,76 @@ Let's start by understanding your basics. Tell me about your product or service,
 
     def _parse_ai_response(self, content: str) -> Dict[str, Any]:
         """Robust JSON parsing with multiple fallback strategies"""
+        if not content:
+            return self._create_default_campaign()
+        
+        # Strategy 1: Try direct JSON parsing
         try:
-            # Try direct JSON parsing first
             return json.loads(content)
         except json.JSONDecodeError:
-            # Extract JSON from markdown or other formats
-            json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
-            if json_match:
-                try:
-                    return json.loads(json_match.group(1))
-                except json.JSONDecodeError:
-                    pass
-            
-            # Fallback: create structured content
-            return self._create_structured_campaign_from_text(content)
+            pass
+        
+        # Strategy 2: Extract JSON from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 3: Extract anything that looks like JSON
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 4: If all else fails, create structured content from text
+        return self._create_structured_campaign_from_text(content)
 
     def _create_default_campaign(self) -> Dict[str, Any]:
         """Default campaign structure"""
         return {
             "campaign_strategy": {
-                "overview": "Data-driven marketing campaign focused on your target audience and business goals.",
-                "targeting": "Precision targeting based on audience demographics and behaviors.",
-                "positioning": "Clear market positioning highlighting unique value propositions.",
-                "success_metrics": ["Engagement rate", "Conversion rate", "ROI", "Brand awareness"]
+                "overview": "Data-driven marketing campaign focused on your target audience and business goals, enhanced with current market insights.",
+                "targeting": "Precision targeting based on audience demographics, behaviors, and current market trends.",
+                "positioning": "Clear market positioning highlighting unique value propositions and competitive advantages.",
+                "success_metrics": ["Engagement rate", "Conversion rate", "ROI", "Brand awareness", "Lead generation"],
+                "competitive_advantage": "Leveraging unique selling points to differentiate from market competitors"
             },
             "ad_copy": {
-                "facebook": ["Engaging Facebook ad copy tailored to your audience"],
-                "instagram": ["Visual Instagram content with compelling captions"],
-                "email": ["Professional email campaigns with clear CTAs"],
-                "google_ads": ["High-converting Google Ads copy with relevant keywords"]
+                "facebook": ["Engaging Facebook ad copy tailored to your audience with strong CTAs"],
+                "instagram": ["Visual Instagram content with compelling captions and relevant hashtags"],
+                "email": ["Professional email campaigns with clear value propositions and calls-to-action"],
+                "google_ads": ["High-converting Google Ads copy with relevant keywords and compelling offers"]
             },
             "email_drafts": [
-                "Subject: Welcome to Our Campaign\n\nEngaging email content...",
-                "Subject: Special Offer Inside\n\nCompelling follow-up content..."
+                "Subject: Welcome to Our Exclusive Campaign!\n\nEngaging email content highlighting key benefits and next steps...",
+                "Subject: Special Offer Inside - Don't Miss Out!\n\nCompelling follow-up content with clear call-to-action..."
             ],
             "social_media_posts": [
-                "Engaging social media post with relevant hashtags",
-                "Educational content about your industry",
-                "Promotional post with clear call-to-action"
+                "Facebook: Engaging post about your unique value proposition with relevant hashtags #marketing #business",
+                "Instagram: Visual story showcasing your product benefits with behind-the-scenes content",
+                "LinkedIn: Professional post highlighting industry insights and your solution"
             ],
             "content_calendar": {
-                "week_1": ["Platform setup", "Content creation", "Audience research"],
-                "week_2": ["Campaign launch", "Initial promotions", "Engagement tracking"],
-                "week_3": ["Performance analysis", "Content optimization", "A/B testing"],
-                "week_4": ["Scale successful tactics", "Audience expansion", "ROI calculation"]
+                "week_1": ["Platform setup and audience research", "Content creation and asset development", "Initial audience targeting"],
+                "week_2": ["Campaign launch across all channels", "Initial promotions and engagement", "Performance tracking setup"],
+                "week_3": ["Performance analysis and optimization", "Content A/B testing", "Audience refinement"],
+                "week_4": ["Scale successful tactics", "Expand to new audience segments", "ROI calculation and reporting"]
             },
             "key_messaging": [
-                "Clear value proposition",
-                "Compelling unique selling points", 
-                "Strong call-to-action messaging"
+                "Clear value proposition addressing customer pain points",
+                "Compelling unique selling points against competitors", 
+                "Strong call-to-action messaging driving conversions",
+                "Trust-building social proof and testimonials"
             ]
         }
 
     def _create_structured_campaign_from_text(self, text: str) -> Dict[str, Any]:
         """Create structured campaign from unstructured text"""
         return self._create_default_campaign()
-
-    def _should_create_campaign(self, user_message: str) -> bool:
-        """Check if user wants to create campaign"""
-        triggers = ['create campaign', 'yes', 'generate', 'make campaign', 'proceed', 'go ahead', 'ready', 'start']
-        return any(trigger in user_message.lower() for trigger in triggers)
 
 # Global service instance
 marketing_ai_service = MarketingAIService()
