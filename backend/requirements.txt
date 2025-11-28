@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+ollama
+python-dotenv
+langchain-ollama
+langchain
+duckduckgo-search
+google-search-results
+wikipedia
+langchain-community
+cors
