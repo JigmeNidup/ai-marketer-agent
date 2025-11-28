@@ -48,6 +48,7 @@ class SerperSearchService:
                     title = item.get('title', '')
                     # Clean up title and extract company name
                     company = self._extract_company_name(title)
+                    print(company)
                     if company and company not in competitors:
                         competitors.append(company)
             

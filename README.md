@@ -113,6 +113,46 @@ marketing-ai-assistant/
     └── tailwind.config.js
 ```
 
+## 🎯 Core Features
+## 1. Intelligent Conversation Flow
+Contextual Understanding: Extracts marketing context from natural conversations
+
+State Management: Tracks conversation state (collecting context → gathering insights → campaign generation)
+
+Early Exit: Users can generate campaigns at any point with available information
+
+## 2. Campaign Generation
+Comprehensive Strategy: Complete marketing plans with targeting, positioning, and success metrics
+
+Multi-Platform Content: Ad copy for Facebook, Instagram, Twitter, LinkedIn, Email, Google Ads, TikTok, YouTube
+
+Email Campaigns: Ready-to-use email drafts with subject lines
+
+Content Calendar: 4-week implementation timeline
+
+Key Messaging: Core brand messages and value propositions
+
+## 3. Real-Time Market Intelligence
+Competitor Research: Automatically finds and analyzes competitors using web search
+
+Trend Analysis: Discovers trending keywords and topics in your industry
+
+Web Enhancement: Augments user-provided context with current market data
+
+## 4. Visual Asset Generation
+AI-Powered Banners: Generates marketing banners using Fal.ai FLUX model
+
+Platform Optimization: Creates banners optimized for different social media platforms
+
+Multiple Aspect Ratios: Supports 1:1, 16:9, 9:16, 4:3, 3:4 formats
+
+## 5. Export & Reporting
+PDF Reports: Professional campaign documentation
+
+Text Export: Fallback text-based reports
+
+Asset Download: Download generated banners and images
+
 ## 🔍 How It Works
 - Context collection → Insight gathering → Campaign generation
 - Uses Ollama for local inference
@@ -129,18 +169,6 @@ marketing-ai-assistant/
 - JSON parsing recovery
 - Session restoration
 - Input validation
-
-## 📊 Performance
-- Caching
-- Async operations
-- Health checks
-- Logs & analytics
-
-## 🔒 Security
-- No data persistence
-- Sanitized inputs
-- CORS control
-- API key security
 
 ## 🧪 Testing
 ### Backend
@@ -162,13 +190,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 npm run build
 npm start
 ```
-
-## 🤝 Contributing
-- Fork → Branch → Implement → PR
-- PEP8, TypeScript, ESLint, docs
-
-## 📝 License
-MIT License
 
 ## 🙏 Acknowledgments
 - Ollama

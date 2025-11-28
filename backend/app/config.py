@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     
     # Web search settings
     enable_web_search: bool = True
-    serper_api_key: Optional[str] = None
+    serper_api_key: Optional[str] = "01bc89a10a494be22787900f1f3948b45f115b35"
     serper_api_url: str = "https://google.serper.dev/search"
     max_search_results: int = 5
     search_timeout: int = 10
