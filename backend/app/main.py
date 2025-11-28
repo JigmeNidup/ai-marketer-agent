@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from .models import CampaignRequest, CampaignResponse, HealthResponse, BannerRequest, BannerResponse, MultipleBannersResponse
 from .services import marketing_ai_service
-from .banner_service import banner_generator
+from .banner_service_cloud import banner_generator
 
 from .config import settings
 import uuid
@@ -43,12 +43,17 @@ async def chat_endpoint(request: CampaignRequest):
         
         return CampaignResponse(**response)
     except Exception as e:
+        print(str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/campaign/generate-now")
 async def generate_campaign_now(request: CampaignRequest):
-    """Force campaign generation with current context"""
+    """Force campaign generation with current context - FIXED to preserve context"""
     try:
+        # Update context with the message first to preserve conversation flow
+        marketing_ai_service.update_context_from_message(request.user_id, request.message)
+        
+        # Then generate campaign
         response = marketing_ai_service._generate_campaign_with_current_context(
             request.user_id
         )
@@ -66,6 +71,9 @@ async def enhance_context_with_search(request: EnhanceContextRequest):
         
         # Enhance with web search
         enhanced_context = marketing_ai_service._enhance_context_with_web_search(context)
+        
+        # Update the context in the service
+        marketing_ai_service.conversation_contexts[request.user_id] = enhanced_context
         
         return {
             "message": "Context enhanced with web search data",
@@ -93,6 +101,7 @@ async def get_conversation_context(user_id: str):
     try:
         context = marketing_ai_service.conversation_contexts.get(user_id)
         state = marketing_ai_service.conversation_states.get(user_id)
+        history = marketing_ai_service.conversation_histories.get(user_id, [])
         
         if not context:
             raise HTTPException(status_code=404, detail="Conversation not found")
@@ -100,7 +109,21 @@ async def get_conversation_context(user_id: str):
         return {
             "context": context,
             "state": state,
-            "missing_fields": marketing_ai_service.get_missing_fields(context)
+            "history_length": len(history),
+            "missing_fields": context.get_missing_fields(),  # Use model method
+            "is_complete": context.is_complete()  # Use model method
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/conversation/{user_id}/history")
+async def get_conversation_history(user_id: str, limit: int = 10):
+    """Get conversation history for debugging"""
+    try:
+        history = marketing_ai_service.conversation_histories.get(user_id, [])
+        return {
+            "history": history[-limit:],
+            "total_messages": len(history)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -171,7 +194,7 @@ async def generate_banners_from_context(user_id: str, aspect_ratio: str = "16:9"
         if not context:
             raise HTTPException(status_code=404, detail="No campaign context found")
         
-        # Convert context to dictionary
+        # Convert context to dictionary using the model's dict method
         context_dict = context.dict()
         
         result = banner_generator.generate_campaign_banner(
@@ -183,6 +206,31 @@ async def generate_banners_from_context(user_id: str, aspect_ratio: str = "16:9"
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Banner generation failed: {str(e)}")
+
+@app.get("/debug/users")
+async def get_active_users():
+    """Debug endpoint to see active users and context states"""
+    try:
+        active_users = {}
+        for user_id in marketing_ai_service.conversation_contexts.keys():
+            context = marketing_ai_service.conversation_contexts[user_id]
+            state = marketing_ai_service.conversation_states[user_id]
+            history = marketing_ai_service.conversation_histories.get(user_id, [])
+            
+            active_users[user_id] = {
+                "state": state,
+                "context_complete": context.is_complete(),
+                "missing_fields": context.get_missing_fields(),
+                "history_length": len(history),
+                "last_activity": marketing_ai_service.last_activity.get(user_id)
+            }
+        
+        return {
+            "active_users": active_users,
+            "total_users": len(active_users)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     
 if __name__ == "__main__":
     import uvicorn

@@ -212,6 +212,21 @@ Always maintain a professional yet approachable tone. Ask one question at a time
             self.conversation_histories.pop(user_id, None)
             self.last_activity.pop(user_id, None)
 
+    def _add_to_conversation_history(self, user_id: str, role: str, content: str):
+        """Add message to conversation history"""
+        if user_id not in self.conversation_histories:
+            self.conversation_histories[user_id] = []
+        
+        self.conversation_histories[user_id].append({
+            "role": role,
+            "content": content,
+            "timestamp": time.time()
+        })
+        
+        # Keep only last 20 messages to prevent context overflow
+        if len(self.conversation_histories[user_id]) > 20:
+            self.conversation_histories[user_id] = self.conversation_histories[user_id][-20:]
+
     def initialize_conversation(self, user_id: str) -> str:
         """Initialize a new conversation with system prompt"""
         self._cleanup_old_conversations()
@@ -231,16 +246,15 @@ I'll help you create a comprehensive marketing campaign. We can either:
 
 Let's start by understanding your product or service. What are you offering?"""
         
+        # Add system message to history
+        self._add_to_conversation_history(user_id, "system", self.system_prompt)
+        self._add_to_conversation_history(user_id, "assistant", initial_prompt)
+        
         return initial_prompt
 
     def get_missing_fields(self, context: UserContext) -> List[str]:
         """Get list of missing required fields"""
-        missing = []
-        for field in settings.required_fields:
-            current_value = getattr(context, field)
-            if current_value is None or (isinstance(current_value, list) and len(current_value) == 0):
-                missing.append(field)
-        return missing
+        return context.get_missing_fields()
 
     def _should_generate_campaign_early(self, user_message: str) -> bool:
         """Check if user wants to generate campaign immediately"""
@@ -292,38 +306,52 @@ Let's start by understanding your product or service. What are you offering?"""
 
     def update_context_from_message(self, user_id: str, message: str) -> UserContext:
         """Update context from user message with enhanced extraction"""
+        if user_id not in self.conversation_contexts:
+            self.initialize_conversation(user_id)
+            
         context = self.conversation_contexts[user_id]
         
         # Manual context extraction
         updates = self._extract_context_manual(message, context)
         
-        # Apply updates
-        for field, value in updates.items():
-            if hasattr(context, field) and value is not None:
-                current_value = getattr(context, field)
-                if isinstance(current_value, list) and isinstance(value, list):
-                    # Merge lists
-                    updated_list = current_value + [item for item in value if item not in current_value]
-                    setattr(context, field, updated_list)
-                else:
-                    setattr(context, field, value)
+        # AI-powered context extraction for better understanding
+        ai_updates = self._extract_context_with_ai(user_id, message, context)
+        updates.update(ai_updates)
         
-        return context
+        # Apply updates using the model's merge method
+        updated_context = context.merge_context(updates)
+        self.conversation_contexts[user_id] = updated_context
+        
+        return updated_context
 
     def _extract_context_manual(self, message: str, current_context: UserContext) -> Dict[str, Any]:
-        """Manual context extraction"""
+        """Enhanced manual context extraction"""
         updates = {}
         message_lower = message.lower()
         
-        # Basic field extraction patterns
+        # Enhanced field extraction patterns
         patterns = {
             'target_audience': [
-                r'(?:audience|target|customers?|users?).{0,20}?(?:is|are|:)\s*([^.!?]+)',
-                r'(?:reach|targeting|focusing on)\s+([^.!?]+?)(?:audience|market|demographic)',
+                r'(?:audience|target|customers?|users?|buyers?|clients?).{0,30}?(?:is|are|:)\s*([^.!?]+)',
+                r'(?:reach|targeting|focusing on|marketing to)\s+([^.!?]+?)(?:audience|market|demographic|people)',
+                r'(?:for|to)\s+([^.!?]+?)(?:aged|years old|year olds|professionals|students|parents)',
+                r'(?:demographic|audience).{0,20}?(?:include|includes|including|are)\s*([^.!?]+)',
             ],
             'product_details': [
-                r'(?:product|service|business|offering).{0,30}?(?:is|are|:)\s*([^.!?]+)',
-                r'(?:sell|offer|provide).{0,30}?([^.!?]+)',
+                r'(?:product|service|business|offering|company|startup).{0,40}?(?:is|are|:|\'s)\s*([^.!?]+)',
+                r'(?:sell|offer|provide|create|build).{0,40}?([^.!?]+)',
+                r'(?:we|i|our).{0,20}?(?:have|sell|offer|provide).{0,30}?([^.!?]+)',
+                r'(?:focus|specializ).{0,30}?([^.!?]+)',
+            ],
+            'budget': [
+                r'(?:budget|spend|investment).{0,20}?(?:is|:)\s*([^.!?]+)',
+                r'(?:\\$|USD|dollars?).{0,10}?([0-9,]+)',
+                r'(?:budget|spend).{0,15}?([0-9,]+)',
+            ],
+            'timeline': [
+                r'(?:timeline|schedule|timeframe|duration).{0,20}?(?:is|:)\s*([^.!?]+)',
+                r'(?:launch|start|run).{0,15}?(?:in|for)\s*([^.!?]+)',
+                r'(?:campaign|project).{0,15}?(?:last|run).{0,10}?([^.!?]+)',
             ],
         }
         
@@ -341,18 +369,65 @@ Let's start by understanding your product or service. What are you offering?"""
         
         return updates
 
+    def _extract_context_with_ai(self, user_id: str, message: str, current_context: UserContext) -> Dict[str, Any]:
+        """Use AI to extract context from user message"""
+        try:
+            context_prompt = f"""
+            Extract marketing context from this user message. Return ONLY a JSON object with any detected fields:
+
+            CURRENT CONTEXT:
+            {current_context.to_prompt_context()}
+
+            USER MESSAGE: "{message}"
+
+            Fields to look for:
+            - target_audience: Who they're targeting
+            - product_details: What they're selling/offering  
+            - brand_tone: professional, casual, funny, inspirational, authoritative
+            - campaign_goals: awareness, conversion, engagement, lead_generation
+            - preferred_platforms: facebook, instagram, twitter, linkedin, email, google_ads, tiktok, youtube
+            - budget: Any budget mentioned
+            - timeline: Any timeline mentioned
+            - key_messages: Any key messaging points
+
+            Return JSON format: {{"field": "value"}} or {{}} if nothing found.
+            """
+
+            response = self.ollama_client.chat(
+                model=settings.ollama_model,
+                messages=[{'role': 'user', 'content': context_prompt}],
+                options={'temperature': 0.1, 'num_predict': 500}
+            )
+            
+            content = response['message']['content']
+            
+            # Try to parse JSON response
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+                
+        except Exception as e:
+            print(f"AI context extraction error: {e}")
+        
+        return {}
+
+    # In your _extract_enum_fields method, update the goal_keywords mapping:
     def _extract_enum_fields(self, message: str) -> Dict[str, Any]:
         """Extract enum fields"""
         updates = {}
         message_lower = message.lower()
         
-        # Brand tone mapping
+        # Brand tone mapping (keep this as is)
         tone_mapping = {
             'professional': BrandTone.PROFESSIONAL,
             'casual': BrandTone.CASUAL,
             'funny': BrandTone.FUNNY,
+            'humorous': BrandTone.FUNNY,
             'inspirational': BrandTone.INSPIRATIONAL,
+            'inspiring': BrandTone.INSPIRATIONAL,
             'authoritative': BrandTone.AUTHORITATIVE,
+            'formal': BrandTone.PROFESSIONAL,
+            'friendly': BrandTone.CASUAL,
         }
         
         for tone_keyword, tone_enum in tone_mapping.items():
@@ -360,15 +435,18 @@ Let's start by understanding your product or service. What are you offering?"""
                 updates['brand_tone'] = tone_enum
                 break
         
-        # Campaign goals mapping
+        # FIXED: Campaign goals mapping - map 'awareness' to 'brand_awareness'
         goal_keywords = {
             'brand awareness': CampaignGoal.AWARENESS,
-            'awareness': CampaignGoal.AWARENESS,
+            'awareness': CampaignGoal.AWARENESS,  # This maps 'awareness' to AWARENESS enum
             'conversions': CampaignGoal.CONVERSION,
             'conversion': CampaignGoal.CONVERSION,
+            'sales': CampaignGoal.CONVERSION,
             'engagement': CampaignGoal.ENGAGEMENT,
             'lead generation': CampaignGoal.LEAD_GENERATION,
             'leads': CampaignGoal.LEAD_GENERATION,
+            'traffic': CampaignGoal.AWARENESS,
+            'visibility': CampaignGoal.AWARENESS,
         }
         
         detected_goals = []
@@ -379,16 +457,19 @@ Let's start by understanding your product or service. What are you offering?"""
         if detected_goals:
             updates['campaign_goals'] = detected_goals
         
-        # Platform mapping
+        # Platform mapping (keep this as is)
         platform_keywords = {
             'facebook': Platform.FACEBOOK,
             'instagram': Platform.INSTAGRAM,
             'twitter': Platform.TWITTER,
+            'x.com': Platform.TWITTER,
             'linkedin': Platform.LINKEDIN,
             'email': Platform.EMAIL,
             'google ads': Platform.GOOGLE_ADS,
+            'google': Platform.GOOGLE_ADS,
             'tiktok': Platform.TIKTOK,
             'youtube': Platform.YOUTUBE,
+            'video': Platform.YOUTUBE,
         }
         
         detected_platforms = []
@@ -402,8 +483,11 @@ Let's start by understanding your product or service. What are you offering?"""
         return updates
 
     def generate_response(self, user_id: str, user_message: str) -> Dict[str, Any]:
-        """Enhanced response generation with early campaign trigger"""
+        """Enhanced response generation with conversation history"""
         self.last_activity[user_id] = time.time()
+        
+        # Add user message to history
+        self._add_to_conversation_history(user_id, "user", user_message)
         
         # Initialize if new user
         if user_id not in self.conversation_contexts:
@@ -439,8 +523,11 @@ Let's start by understanding your product or service. What are you offering?"""
         if state == ConversationState.READY_FOR_CAMPAIGN and self._should_create_campaign(user_message):
             return self._generate_campaign_with_current_context(user_id)
         
-        # Generate conversational response
-        response = self._generate_conversational_response(context, state, user_message)
+        # Generate conversational response WITH HISTORY
+        response = self._generate_conversational_response(user_id, context, state, user_message)
+        
+        # Add AI response to history
+        self._add_to_conversation_history(user_id, "assistant", response)
         
         return {
             "response": response,
@@ -448,6 +535,121 @@ Let's start by understanding your product or service. What are you offering?"""
             "state": state,
             "is_complete": False
         }
+
+    def _generate_conversational_response(self, user_id: str, context: UserContext, state: ConversationState, user_message: str) -> str:
+        """Generate conversational response using conversation history"""
+        
+        # Build messages with conversation history
+        messages = []
+        
+        # Add system prompt
+        messages.append({'role': 'system', 'content': self.system_prompt})
+        
+        # Add conversation history (last 10 exchanges)
+        history = self.conversation_histories.get(user_id, [])
+        # Skip system message and include last user/assistant pairs
+        for msg in history[-20:]:  # Include more context
+            if msg['role'] != 'system':
+                messages.append({'role': msg['role'], 'content': msg['content']})
+        
+        # Add current context and state information
+        state_prompt = self._build_state_prompt(context, state, user_message)
+        messages.append({'role': 'user', 'content': state_prompt})
+        
+        try:
+            # Get AI response with full context
+            ai_response = self.ollama_client.chat(
+                model=settings.ollama_model,
+                messages=messages,
+                options={'temperature': settings.temperature, 'num_predict': settings.max_tokens}
+            )
+            
+            return ai_response['message']['content']
+            
+        except Exception as e:
+            print(f"Error in AI response: {e}")
+            # Fallback response without history
+            return self._generate_fallback_response(context, state, user_message)
+
+    def _build_state_prompt(self, context: UserContext, state: ConversationState, user_message: str) -> str:
+        """Build prompt based on current state and context"""
+        
+        # Safe conversion of enum values to strings
+        campaign_goals_str = ', '.join([
+            goal.value if hasattr(goal, 'value') else str(goal) 
+            for goal in (context.campaign_goals or [])
+        ])
+        
+        platforms_str = ', '.join([
+            platform.value if hasattr(platform, 'value') else str(platform)
+            for platform in (context.preferred_platforms or [])
+        ])
+        
+        brand_tone_str = context.brand_tone.value if hasattr(context.brand_tone, 'value') else str(context.brand_tone) if context.brand_tone else 'Not specified'
+        
+        context_summary = f"""
+        CURRENT CONTEXT:
+        - Product: {context.product_details or 'Not specified'}
+        - Audience: {context.target_audience or 'Not specified'} 
+        - Tone: {brand_tone_str}
+        - Goals: {campaign_goals_str or 'Not specified'}
+        - Platforms: {platforms_str or 'Not specified'}
+        - Budget: {context.budget or 'Not specified'}
+        - Timeline: {context.timeline or 'Not specified'}
+        - Competitors: {', '.join(context.competitors) if context.competitors else 'Not researched yet'}
+        - Trends: {', '.join(context.trending_keywords) if context.trending_keywords else 'Not researched yet'}
+        
+        CONVERSATION STATE: {state.value}
+        USER'S LATEST MESSAGE: "{user_message}"
+        """
+
+        if state == ConversationState.COLLECTING_CONTEXT:
+            missing_fields = self.get_missing_fields(context)
+            if missing_fields:
+                field_questions = {
+                    'target_audience': "Ask about their target audience demographics, interests, and behaviors",
+                    'brand_tone': "Ask about their preferred brand tone and voice",
+                    'campaign_goals': "Ask about their primary marketing objectives and goals",
+                    'preferred_platforms': "Ask which marketing platforms they want to focus on",
+                    'product_details': "Ask for more details about their product/service and key benefits"
+                }
+                next_question = field_questions.get(missing_fields[0], f"Ask about {missing_fields[0]}")
+                
+                return f"{context_summary}\n\nYour task: Continue the conversation naturally. {next_question}. Remember they can say 'generate campaign now' at any time."
+            else:
+                return f"{context_summary}\n\nYour task: All basic context collected. Transition to gathering market insights about competitors and trends."
+        
+        elif state == ConversationState.GATHERING_INSIGHTS:
+            if not context.competitors:
+                return f"{context_summary}\n\nYour task: Ask about their main competitors or offer to research competitors in their industry."
+            elif not context.trending_keywords:
+                return f"{context_summary}\n\nYour task: Ask about trending topics they want to target or offer to research current market trends."
+            else:
+                return f"{context_summary}\n\nYour task: Let them know we're ready to create the campaign. They can say 'generate campaign now' when ready."
+        
+        else:  # READY_FOR_CAMPAIGN
+            return f"{context_summary}\n\nYour task: We're ready to generate the campaign. Remind them they can say 'generate campaign now' at any time."
+
+    def _generate_fallback_response(self, context: UserContext, state: ConversationState, user_message: str) -> str:
+        """Fallback response when AI call fails"""
+        missing_fields = self.get_missing_fields(context)
+        
+        if state == ConversationState.COLLECTING_CONTEXT and missing_fields:
+            field_questions = {
+                'target_audience': "🎯 Could you tell me more about your target audience?",
+                'brand_tone': "🎭 What brand tone would you prefer for your campaign?",
+                'campaign_goals': "🎯 What are your main marketing goals?",
+                'preferred_platforms': "📱 Which platforms will you be using for marketing?",
+                'product_details': "📦 Tell me more about your product or service."
+            }
+            return field_questions.get(missing_fields[0], "I'd like to know more about your marketing needs.")
+        
+        return "I understand. We can continue building your campaign strategy. Feel free to ask any questions or say 'generate campaign now' when you're ready."
+
+    def _should_create_campaign(self, user_message: str) -> bool:
+        """Check if user wants to create campaign"""
+        triggers = ['create campaign', 'yes', 'generate', 'make campaign', 'proceed', 'go ahead', 'ready', 'start']
+        return any(trigger in user_message.lower() for trigger in triggers)
 
     def _generate_campaign_with_current_context(self, user_id: str) -> Dict[str, Any]:
         """Generate campaign with available context, enhanced with web search"""
@@ -457,6 +659,7 @@ Let's start by understanding your product or service. What are you offering?"""
         
         # Enhance with web search
         context = self._enhance_context_with_web_search(context)
+        self.conversation_contexts[user_id] = context  # Update with enhanced context
         
         # Generate campaign content
         campaign_content = self.generate_campaign_content(user_id)
@@ -479,107 +682,6 @@ Let's start by understanding your product or service. What are you offering?"""
             "campaign_content": campaign_content
         }
 
-    def _generate_conversational_response(self, context: UserContext, state: ConversationState, user_message: str) -> str:
-        """Generate appropriate conversational response based on state"""
-        
-        if state == ConversationState.COLLECTING_CONTEXT:
-            missing_fields = self.get_missing_fields(context)
-            if missing_fields:
-                field_questions = {
-                    'target_audience': "🎯 **Who is your target audience?** (e.g., 'Young professionals aged 25-35 interested in fitness and sustainability')",
-                    'brand_tone': "🎭 **What brand tone would you like?** (professional, casual, funny, inspirational, authoritative)",
-                    'campaign_goals': "🎯 **What are your main campaign goals?** (brand awareness, conversions, engagement, lead generation)",
-                    'preferred_platforms': "📱 **Which platforms will you use?** (Facebook, Instagram, Twitter, LinkedIn, Email, Google Ads, TikTok, YouTube)",
-                    'product_details': "📦 **Tell me about your product/service and its key benefits**"
-                }
-                next_question = field_questions[missing_fields[0]]
-                
-                prompt = f"""
-                {self.system_prompt}
-                
-                Current context collected so far:
-                - Product: {context.product_details or 'Not specified'}
-                - Audience: {context.target_audience or 'Not specified'} 
-                - Tone: {context.brand_tone or 'Not specified'}
-                - Goals: {', '.join([g.value for g in context.campaign_goals]) if context.campaign_goals else 'Not specified'}
-                - Platforms: {', '.join([p.value for p in context.preferred_platforms]) if context.preferred_platforms else 'Not specified'}
-                
-                User just said: "{user_message}"
-                
-                Next question to ask: {next_question}
-                
-                Respond naturally, acknowledge their input, and ask the next question. Keep it conversational.
-                """
-            else:
-                # Move to insights gathering
-                prompt = f"""
-                {self.system_prompt}
-                
-                Great! I have the basic information. Now let's gather some market insights.
-                
-                User message: "{user_message}"
-                
-                Ask if they have specific competitors in mind, or if they'd like you to research current competitors and trends for their industry.
-                """
-        
-        elif state == ConversationState.GATHERING_INSIGHTS:
-            if not context.competitors:
-                prompt = f"""
-                {self.system_prompt}
-                
-                Let's research your competitive landscape.
-                
-                User message: "{user_message}"
-                
-                Ask about their main competitors, or offer to research current competitors in their space.
-                """
-            elif not context.trending_keywords:
-                prompt = f"""
-                {self.system_prompt}
-                
-                Now let's look at current market trends.
-                
-                User message: "{user_message}"
-                
-                Ask about any specific keywords or trends they want to target, or offer to research current trends.
-                """
-            else:
-                prompt = f"""
-                {self.system_prompt}
-                
-                We have all the insights we need! The user can now ask to generate the campaign.
-                
-                User message: "{user_message}"
-                
-                Let them know we're ready to create their campaign and they can say "generate campaign now" whenever they're ready.
-                """
-        
-        else:
-            # Ready for campaign
-            prompt = f"""
-            {self.system_prompt}
-            
-            We're ready to generate the campaign! The user can trigger it at any time.
-            
-            User message: "{user_message}"
-            
-            Remind them they can say "generate campaign now" to create their marketing campaign.
-            """
-        
-        # Get AI response
-        ai_response = self.ollama_client.chat(
-            model=settings.ollama_model,
-            messages=[{'role': 'user', 'content': prompt}],
-            options={'temperature': settings.temperature, 'num_predict': settings.max_tokens}
-        )
-        
-        return ai_response['message']['content']
-
-    def _should_create_campaign(self, user_message: str) -> bool:
-        """Check if user wants to create campaign"""
-        triggers = ['create campaign', 'yes', 'generate', 'make campaign', 'proceed', 'go ahead', 'ready', 'start']
-        return any(trigger in user_message.lower() for trigger in triggers)
-
     def generate_campaign_content(self, user_id: str) -> Dict[str, Any]:
         """Generate comprehensive campaign deliverables"""
         context = self.conversation_contexts[user_id]
@@ -590,7 +692,7 @@ Let's start by understanding your product or service. What are you offering?"""
         Generate a COMPLETE marketing campaign based on this context:
 
         CONTEXT:
-        {context.json()}
+        {context.to_prompt_context()}
 
         DELIVERABLES REQUIRED:
 
