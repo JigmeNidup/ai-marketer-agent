@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from .models import CampaignRequest, CampaignResponse, HealthResponse
+from .models import CampaignRequest, CampaignResponse, HealthResponse, BannerRequest, BannerResponse, MultipleBannersResponse
 from .services import marketing_ai_service
+from .banner_service import banner_generator
+
 from .config import settings
 import uuid
 import time
@@ -135,6 +137,53 @@ async def root():
         ]
     }
 
+@app.post("/banners/generate", response_model=BannerResponse)
+async def generate_campaign_banner_route(request: BannerRequest):
+    """Generate a single campaign banner"""
+    try:
+        result = banner_generator.generate_campaign_banner(
+            context=request.context,
+            aspect_ratio=request.aspect_ratio
+        )
+        return BannerResponse(**result)
+    except Exception as e:
+        print(str(e))
+        raise HTTPException(status_code=500, detail=f"Banner generation failed: {str(e)}")
+
+@app.post("/banners/generate-multiple", response_model=MultipleBannersResponse)
+async def generate_multiple_banners(request: BannerRequest):
+    """Generate banners for multiple platforms"""
+    try:
+        results = banner_generator.generate_multiple_platform_banners(request.context)
+        return MultipleBannersResponse(
+            success=True,
+            banners=results,
+            message="Multiple banners generated successfully"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Multiple banner generation failed: {str(e)}")
+
+@app.post("/campaign/{user_id}/generate-banners")
+async def generate_banners_from_context(user_id: str, aspect_ratio: str = "16:9"):
+    """Generate banners using existing campaign context"""
+    try:
+        context = marketing_ai_service.conversation_contexts.get(user_id)
+        if not context:
+            raise HTTPException(status_code=404, detail="No campaign context found")
+        
+        # Convert context to dictionary
+        context_dict = context.dict()
+        
+        result = banner_generator.generate_campaign_banner(
+            context=context_dict,
+            aspect_ratio=aspect_ratio
+        )
+        
+        return BannerResponse(**result)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Banner generation failed: {str(e)}")
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

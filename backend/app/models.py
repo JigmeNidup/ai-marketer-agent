@@ -123,3 +123,25 @@ class HealthResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., description="Search query for competitors or trends")
     search_type: str = Field(default="competitors", description="Type of search: competitors or trends")
+
+class BannerRequest(BaseModel):
+    user_id: str = Field(..., description="User identifier")
+    context: Dict[str, Any] = Field(..., description="Campaign context for banner generation")
+    aspect_ratio: str = Field(default="16:9", description="Aspect ratio for the banner")
+    generate_for_all_platforms: bool = Field(default=False, description="Generate for all platforms")
+
+class BannerResponse(BaseModel):
+    success: bool = Field(..., description="Generation success status")
+    image_data: Optional[str] = Field(None, description="Base64 encoded image data")
+    prompt: Optional[str] = Field(None, description="Prompt used for generation")
+    aspect_ratio: Optional[str] = Field(None, description="Aspect ratio of generated banner")
+    dimensions: Optional[str] = Field(None, description="Image dimensions")
+    platform: Optional[str] = Field(None, description="Platform optimization")
+    description: Optional[str] = Field(None, description="Banner description")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    message: str = Field(..., description="Status message")
+
+class MultipleBannersResponse(BaseModel):
+    success: bool = Field(..., description="Overall success status")
+    banners: Dict[str, BannerResponse] = Field(..., description="Generated banners by platform")
+    message: str = Field(..., description="Status message")
