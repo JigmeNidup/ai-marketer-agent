@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:3000"]
     
     # Conversation settings
-    max_conversation_age: int = 3600
+    max_conversation_age: int = 36000
     required_fields: List[str] = [
         'target_audience', 'brand_tone', 'campaign_goals', 
         'preferred_platforms', 'product_details'
