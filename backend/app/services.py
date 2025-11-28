@@ -33,7 +33,8 @@ class SerperSearchService:
         
         headers = {
             'X-API-KEY': self.api_key,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            "Authorization": f"Bearer {self.api_key}"
         }
         
         try:

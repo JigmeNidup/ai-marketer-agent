@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from .models import CampaignRequest, CampaignResponse, HealthResponse, SearchRequest
+from pydantic import BaseModel
+from .models import CampaignRequest, CampaignResponse, HealthResponse
 from .services import marketing_ai_service
 from .config import settings
 import uuid
@@ -20,6 +21,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class EnhanceContextRequest(BaseModel):
+    user_id: str
 
 @app.post("/chat", response_model=CampaignResponse)
 async def chat_endpoint(request: CampaignRequest):
@@ -51,7 +55,7 @@ async def generate_campaign_now(request: CampaignRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/search/enhance-context")
-async def enhance_context_with_search(request: CampaignRequest):
+async def enhance_context_with_search(request: EnhanceContextRequest):
     """Enhance current context with web search"""
     try:
         context = marketing_ai_service.conversation_contexts.get(request.user_id)
